@@ -1,0 +1,322 @@
+---
+title: "CREs analysis in PC9"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+we start with the mr.edgeR objects created previously with the methylome analysis script
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+I download the CREs from the ENCODE portal for the PC9 cell line
+
+```{r, eval=FALSE}
+
+setwd("C:/Users/oncotraslacional/Documents/Arantxa/MBD-Seq_David/")
+cres <- read.table ("RData/ENCFF363RKM_ENCFF912RES_ENCFF951CMP_ENCFF160DIZ.7group.bed", stringsAsFactors = FALSE)
+
+colnames(cres) <- c( "chrom",
+                    "start",
+                    "end",
+                    "name",
+                    "score",
+                    "strand",
+                    "thickStart",
+                    "thickEnd",
+                    "reserved",
+                    "ccre", 
+                    "url")
+                    
+
+
+```
+
+The promoters are annotated as PLS (promoter like signature), enhancers as pELS (proximal enhancer like signature), dELS (distal enhancer like signature).Both, promoters and enhancers are also annotated if they are CTCF bound. I want to intersect the DMR with the ENCODE cCREs regions and check if there is any enrichment specifically at promoters and enhancer
+```{r, eval=FALSE}
+
+#Define parameters for the loop
+
+elements.to.keep <- c("PLS,CTCF-bound",
+                      "pELS",
+                      "PLS", 
+                      "pELS,CTCF-bound",
+                      "dELS,CTCF-bound",
+                      "dELS")
+
+cres <- cres[cres$ccre %in% elements.to.keep, c(1:4,6,10)] #Set the cres as rois
+
+cres.rois <- GRanges( seqnames = Rle(cres$chrom),
+                      ranges = IRanges(start= cres$start,
+                                       end = cres$end),
+                      strand = NULL,
+                      mcols= data.frame( cre.id= cres$name,
+                                         cre= cres$ccre))
+
+
+```
+
+I need to find the nearest gene to each CRE. There might be more than one, so I handle only the single matches and leave the rest as NAs. First get the gene location using the medips function getAnnotation, then change the ensmbl id for the hugo gene name and finally do the overlap between those.
+
+```{r, eval=FALSE}
+ chromosomes <- paste0(rep("chr",24),c(1:22,"X","Y"))
+
+ genes <- MEDIPS.getAnnotation ( dataset = c("hsapiens_gene_ensembl"),
+                               annotation = c("GENE"),
+                               chr = chromosomes,
+                               tssSz = c(-1000,100))
+ genes <- genes[[1]]
+ 
+ #Use biomaRt to obtain the HUGO names
+
+  library(biomaRt)
+  
+ 
+  mart <- useDataset("hsapiens_gene_ensembl", 
+                     useMart("ensembl"))
+  
+  hugo <- getBM ( filters= "ensembl_gene_id", 
+                 attributes= c("ensembl_gene_id","hgnc_symbol"),
+                 values = genes$id, 
+                 mart = mart)
+  
+#give the hugo name to each gene
+  genes$hugo<- hugo$hgnc_symbol[match(genes$id, hugo$ensembl_gene_id)]
+    
+#Remove the unmapped transcripts
+  genes <- genes[!(genes$hugo== ""),]
+
+  gene.rois <- GRanges(seqnames = Rle(genes$chr), 
+                ranges = IRanges(start= genes$start, 
+                                 end = genes$end), 
+                mcols= data.frame(ensmbl= genes$id,
+                                  hugo= genes$hugo))
+  
+#Find the nearest gene to each CRE
+
+  nearest.gene <- nearest(cres.rois, 
+                          gene.rois,
+                          select= "all") #In case there is more than one
+  
+#Prepare the data.frame to insert the info:
+  
+  cres$nearest.gene <- rep(NA, nrow(cres))
+  
+  duplicados <- nearest.gene@from[duplicated(nearest.gene@from)]
+  
+#handle only the single matches
+  idx<- !(nearest.gene@from %in% duplicados)
+  
+  cres$nearest.gene[nearest.gene@from[idx]] <- genes$hugo[nearest.gene@to[idx]] #match each cre with the nearest gene
+  
+#Leave the double matches as NA
+
+```
+Map the significant DMR regions with their corresponding CRE (chromatin regulatory element) using the MEDIPs function selectROIS and as rois input the cres
+```{r, eval=FALSE}
+clones <- c("PC9_1",
+            "PC9_2",
+            "PC9_3",
+            "PC9_4")
+
+cols.to.keep <- c( 4:10, 17:20) 
+
+rois <- cres[,1:4]
+#Create the objects for the loop
+gained <- list()
+
+lost <- list ()
+
+clone <- c()
+
+DMR.cres <- list()
+
+for(i in 1:length(clones)){
+ 
+   DMR.cres[[i]] <-  MEDIPS.selectROIs( results = mr.edgeR.sig.pc9[[i]], 
+                                                rois = rois,
+                                                columns = colnames (mr.edgeR.sig.pc9[[i]])[cols.to.keep],
+                                                summarize = "avg")
+   clone <- DMR.cres[[i]]
+  
+   gained[[i]] <- clone[clone$edgeR.logFC > 2, ] #select gained regions
+   
+   lost[[i]] <-  clone [ clone$edgeR.logFC < -2, ] #Select lost regions
+
+}
+
+
+
+  
+  
+
+```
+
+Match the CRE id with the nearest gene
+```{r, eval=FALSE}
+
+
+
+for (i in 1:length(clones)){
+  
+  idx <- match(gained[[i]]$ROI, 
+               cres$name)
+  gained[[i]]$nearest.gene <- cres$nearest.gene[idx] 
+  gained[[i]]$ccre <- cres$ccre[idx]
+  
+  idx2 <-  match(lost[[i]]$ROI,
+                 cres$name)
+  
+  lost[[i]]$nearest.gene <- cres$nearest.gene[idx2]
+  lost[[i]]$ccre <- cres$ccre[idx2]
+}
+
+#Save the tables
+
+for (i in 1:length(clones)){
+  
+  write.csv(gained[[i]], 
+            file= paste(clones[[i]], "gained_ccre.csv"))
+}
+
+for (i in 1:length(clones)){
+  
+  write.csv(lost[[i]], 
+            file= paste(clones[[i]], "lost_ccre.csv"))
+}
+
+
+```
+I investigate further the type of cre in the DMR
+
+```{r, eval=FALSE}
+
+ install.packages("caroline")
+ 
+library(caroline)
+
+ mi.paleta <- c("#E6F598","#ABDDA4" ,"#66C2A5", "#3288BD" ,"#5E4FA2", "#683773")
+
+#Prepare the data for the plot
+
+ expected <- table(cres$ccre)/length(cres$ccre)
+ gained.to.plot<- table(gained[[2]]$ccre)/length(gained[[1]]$ccre)
+
+ spie (expected, gained.to.plot , col= mi.paleta, bg= "WHITE", grid.labs = TRUE)
+ par(mfrow= c( 2,1))
+
+ gained.to.plot <- list()
+ lost.to.plot <- list()
+ 
+ for(i in 1:length(clones)){
+   
+    gained.to.plot[[i]]<- table(gained[[i]]$ccre)/length(gained[[i]]$ccre)
+    lost.to.plot[[i]] <- table(lost[[i]]$ccre)/length(lost[[i]]$ccre)
+ }
+ 
+ 
+ en.este.orden <- c(1,3,5,4,2,6)
+
+ dev.off()
+ pdf("barplots_CRE_fractions.pdf")
+ 
+ par(mfrow= c(2,1))
+ 
+ for(i in 1:length(clones)){
+   
+  barplot(gained.to.plot[[i]][en.este.orden], 
+        main= paste("gained DMR", 
+                    clones[i], 
+                    sep= "_"),
+        las=2,
+        ylim = c(0,0.8), 
+        cex.names = 0.8,
+        col = mi.paleta,
+        ylab= "CRE fraction")
+
+  barplot(lost.to.plot[[i]][en.este.orden], 
+        main= paste("lost DMR",
+                    clones[i],
+                    sep="_"),
+        las=2,
+        ylim = c(0,0.8), 
+        cex.names = 0.8,
+        col = mi.paleta,
+        ylab= "CRE fraction")
+  
+ }
+ 
+ dev.off()
+ 
+barplot(sort(table(lost[[1]]$ccre), 
+             decreasing = TRUE), 
+        main= "gained DMR", las=2)
+
+
+#I make now the pie plots
+
+ for( i in 1:length(clones)){
+   
+   pdf(paste(clones[i],"gained_DMR.pdf",
+             sep="_")
+       )
+   spie(expected, gained.to.plot[[i]], bg="WHITE", col=mi.paleta)
+   
+   dev.off()
+
+  
+ }
+
+ for( i in 1:length(clones)){
+   
+   pdf(paste(clones[i],"lost_DMR.pdf",
+             sep="_")
+       )
+   spie(expected, lost.to.plot[[i]], bg="WHITE", col=mi.paleta)
+   
+   dev.off()
+
+  
+}
+
+
+
+
+```
+
+Lets check if the lost regions have a biological effect looking at the over-expressed genes in the respective clone
+
+```{r. eval=FALSE}
+ setwd("C:/Users/oncotraslacional/Documents/Arantxa/RNA_seq/NOISeq_TMMs/")
+ rna<- read.csv("PC91_UP_NOISeq.csv")
+ names(rna)[1]<- "Gene"
+
+ sum(rna$Gene %in% lost[[1]]$nearest.gene)
+ par(mfrow= c(2,1))
+ barplot(table(lost[[1]]$ccre[lost[[1]]$nearest.gene %in% rna$Gene]),
+        las = 2,
+        col = mi.paleta)
+ 
+ 
+ 
+
+ expected <- table(lost[[1]]$ccre)
+
+ spie(expected,
+     table(lost[[1]]$ccre[lost[[1]]$nearest.gene %in% rna$Gene]), 
+     bg = "white",
+     col = mi.paleta)
+                
+
+ rna.down <- read.csv("PC91_DOWN_NOISeq.csv")
+
+ expected <- table(gained[[1]]$ccre)
+
+ spie(expected,
+     table(gained[[1]]$ccre[gained[[1]]$nearest.gene %in% rna.down$Gene]), 
+     bg = "white",
+     col = mi.paleta)
+                
+
+```
+

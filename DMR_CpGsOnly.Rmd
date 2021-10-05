@@ -1,0 +1,259 @@
+---
+title: "CpG islands in prom"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+To better analyze the DMR I will take into account not the promoter region but only the CpGs inside the promoters.I start the analysis with the significant regions MEDIPs object
+
+```{r, eval=FALSE}
+ setwd("C:/Users/oncotraslacional/Documents/Arantxa/MBD-Seq_David")
+ #load the regions
+
+ cpgs <- read.table(file="/RData/intersect_CpG_with_promotors_pcgenes_-2000_TSS_+500.bed",
+                    stringsAsFactors = FALSE)
+ 
+ colnames(cpgs) <- c("chr", "start", "end", "gene", "strand")
+ 
+ rois <- cpgs[,1:4]
+ 
+ #Use the selectROIS function from MEDIPs
+ 
+ cols.to.keep <- c(4:10, 17:20)
+ 
+ clones <- c("H827_1",
+             "H827_12",
+             "H827_4",
+             "H827_6",
+             "H827_pl1")
+ 
+ gained.cpgs <- list()
+ 
+ lost.cpgs <- list()
+ 
+ DMR <- list()
+
+ for(i in 1:length(clones)){
+ 
+   DMR[[i]] <-  MEDIPS.selectROIs( results = mr.edgeR.sig[[i]], # Keep promoters only
+                                                rois = rois,
+                                                columns= colnames(mr.edgeR.sig[[i]])[cols.to.keep] )
+   clone <- DMR[[i]]
+  
+   gained.cpgs[[i]] <- clone[ clone$edgeR.logFC > 2, ] #select gained regions
+   
+   lost.cpgs[[i]] <-  clone [ clone$edgeR.logFC < -2, ] #Select lost regions
+
+}
+
+ #Check if we have any case in which a gene is both hyper and hypomethylated
+ 
+ dobles <- c()
+ 
+ for( i in 1:length(clones)){
+  dobles[i]<- sum(unique(lost.cpgs[[i]]$ROI) %in% unique(gained.cpgs[[i]]$ROIS))
+} 
+
+ print(dobles)
+ 
+```
+save the tables
+
+
+```{r, eval=FALSE}
+
+file.names <- paste( clones, "gained_cpgs.txt", sep="_")
+
+for (i in 1:length(clones)){
+  
+  write.table( gained.cpgs[[i]], 
+               file= file.names[i],
+               row.names = FALSE)
+}
+
+file.names <- paste( clones, "lost_cpgs.txt", sep="_")
+
+for (i in 1:length(clones)){
+  
+  write.table( lost.cpgs[[i]], 
+               file= file.names[i],
+               row.names = FALSE)
+}
+
+
+```
+
+In the previous list we have the differential methylated CpGs inside promoters, but there might be more than one per promoter and it is also interesting to check if both or only one is a DMR. For that I will name each of the island belonging to a certain promoter gene as 1, 2, 3, etc.. and then perform the selection and merge of the regions
+
+```{r, eval=FALSE}
+
+regiones <- rois$gene
+repetidas <- duplicated(regiones)
+
+regiones[repetidas] <- paste(regiones[repetidas],
+                             "1",
+                             sep =".")
+
+#In case there are more than 2 CpGs per gene I repeat the process
+
+repetidas <- duplicated(regiones)
+
+repes <- strsplit(regiones[repetidas],
+                             split =".",
+                             fixed = TRUE)
+to.change <- c()
+
+for(i in 1:length(repes)){
+  
+  to.change[i] <- paste(repes[[i]][1],
+                        "2",
+                        sep = ".")
+}
+
+regiones[repetidas] <- to.change #replace them
+
+
+#In case there are more than 3 CpGs per gene I repeat the process
+
+repetidas <- duplicated(regiones)
+
+repes <- strsplit(regiones[repetidas],
+                  split =".",
+                  fixed = TRUE)
+to.change <- c()
+
+for(i in 1:length(repes)){
+  
+  to.change[i] <- paste(repes[[i]][1],
+                        "3",
+                        sep = ".")
+}
+
+regiones[repetidas] <- to.change #replace them
+
+
+#Now change the gene column by the regiones object
+
+rois$gene<- regiones
+
+
+
+```
+I can select now those regions from the MEDIPs object
+
+```{r, eval=FALSE}
+cols.to.keep <- c(4:10, 17:20)
+ 
+ clones <- c("H827_1",
+             "H827_12",
+             "H827_4",
+             "H827_6",
+             "H827_pl1")
+ 
+ gained.cpgs <- list()
+ 
+ lost.cpgs <- list()
+ 
+ DMR <- list()
+
+ for(i in 1:length(clones)){
+ 
+   DMR[[i]] <-  MEDIPS.selectROIs( results = mr.edgeR.sig[[i]], # Keep promoters only
+                                                rois = rois,
+                                                columns= colnames(mr.edgeR.sig[[i]])[cols.to.keep] )
+   clone <- DMR[[i]]
+  
+   gained.cpgs[[i]] <- clone[ clone$edgeR.logFC > 2, ] #select gained regions
+   
+   lost.cpgs[[i]] <-  clone [ clone$edgeR.logFC < -2, ] #Select lost regions
+
+}
+
+
+ 
+```
+The value of MEDIPs contains the significantly enriched or depleted methylated regions inside the CpG islands in 100 bp window. I will merge adjacent windows using the function merge.by.gene.
+```{r, eval=FALSE}
+
+#Clone "H827_1"doesn't have any gained regions, so I remove it from the for loop
+
+source("C:/Users/oncotraslacional/Documents/Arantxa/MBD-Seq_David/merge_results_by_gene_function.R")
+
+
+clones <- c("H827_12",
+            "H827_4",
+            "H827_6",
+            "H827_pl1")
+ 
+for (i in 1:length(clones)){
+  
+  colnames(gained.cpgs[[i]])[15] <- "gene"
+  colnames(lost.cpgs[[i]])[15] <- "gene"
+}
+
+gained.cpgs<- gained.cpgs[2:5]
+gained.cpgs.merge <- list()
+for (i in 1:length(clones)){
+  
+  gained.cpgs.merge[[i]] <- merge.by.gene (gained.cpgs[[i]])
+}
+
+
+#Merge the lost regions as well
+clones <- c("H827_1",
+            "H827_12",
+            "H827_4",
+            "H827_6",
+            "H827_pl1")
+
+lost.cpgs.merge <- list()
+for (i in 1:length(clones)){
+  
+  lost.cpgs.merge[[i]] <- merge.by.gene (lost.cpgs[[i]])
+}
+
+
+ 
+
+
+```
+Save the tables as .txt
+```{r, eval=FALSE}
+
+clones <- c("H827_12",
+            "H827_4",
+            "H827_6",
+            "H827_pl1")
+
+file.names <- paste( clones, "gained_cpgs_merge_by_island.txt", sep="_")
+
+for (i in 1:length(clones)){
+  
+  write.table( gained.cpgs.merge[[i]], 
+               file = file.names[i],
+               row.names = FALSE)
+}
+
+#Do the same for the lost regions
+
+clones <- c("H827_1",
+            "H827_12",
+            "H827_4",
+            "H827_6",
+            "H827_pl1")
+
+file.names <- paste( clones, "lost_cpgs_merge_by_island.txt", sep="_")
+
+for (i in 1:length(clones)){
+  
+  write.table( lost.cpgs.merge[[i]], 
+               file = file.names[i],
+               row.names = FALSE)
+}
+
+
+```
+
+

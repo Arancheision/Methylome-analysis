@@ -1,0 +1,261 @@
+---
+title: "Methylome analysis"
+output:
+  html_document:
+    df_print: paged
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+To analyze the methlyome data I will use the MEDIPs package. First I need to install that and all the dependencies.
+The bam files have been mapped using the hg38 genome version so I need to use that for the analysis as well. Load annotations for the genome: exons, genes and TSSs (-1000-500bp)
+
+
+```{r , eval=FALSE}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("BSgenome")
+
+BiocManager::install("MEDIPS")
+
+library(BSgenome)
+library(BiocManager)
+install("BSgenome.Hsapiens.UCSC.hg38.masked")
+library(MEDIPS)
+
+#get the genomes 
+
+BSgenome <- "BSgenome.Hsapiens.UCSC.hg38.masked"
+
+chromosomes <- paste0(rep("chr",24),c(1:22,"X","Y"))
+
+
+```
+Need to load the bam files and create the MEDIPs object:
+
+```{r, eval=FALSE}
+
+setwd("C:/Documents and Settings/oncotraslacional/Documents/Arantxa/MBD-Seq_David/BAMS/")
+ 
+ 
+bams <- list.files(getwd(),pattern = ".bam$")
+
+lista <- vector("list",length(bams))
+ 
+ for (i in 1:length(bams)){
+   sample <- bams[i]
+   lista[[i]] <- MEDIPS.createSet(file = sample,
+                                  BSgenome = BSgenome, 
+                                  chr.select = chromosomes, 
+                                  paired = T, 
+                                  extend=250, 
+                                  window_size = 100, 
+                                  shift=0, 
+                                  uniq = 1e-3 )
+ }
+
+names(lista)<- unlist(strsplit(bams, ".bam"))
+
+```
+
+
+To calculate the coverage methlylation profiles  We need to generate the background vector with the profile of the wild type cell line. For the differential methylation profile I will compare each clone with the parental cell line and put them in the list mr.edgeR
+
+
+```{r, eval=FALSE}
+mr.edgeR.pc9<- list()
+CS <-  MEDIPS.couplingVector(pattern = "CG", refObj = lista[["PC9_wt"]])
+bam_wt <- lista[["PC9_wt"]]
+bams_clones <- lista[9:12]
+  
+  for (i in 1:length(bams_clones)){
+    
+    bam_clon <- bams_clones[[i]]
+    
+    mr.edgeR.pc9[[i]] <-  MEDIPS.meth(MSet1 = bam_clon,
+                                  MSet2 = bam_wt,
+                                  CSet = CS, 
+                                  p.adj = "bonferroni",
+                                  diff.method = "edgeR", 
+                                  MeDIP = T,
+                                  minRowSum = 10, 
+                                  CNV = F,
+                                  diffnorm = "tmm")
+  }
+
+names(mr.edgeR.pc9) <- names(bams_clones)
+
+#Select the significantly enriched or depleted regions with padj < 0.05
+     
+mr.edgeR.sig.pc9<- list()
+
+  for (i in 1:length(mr.edgeR.pc9)){
+  
+    mr.edgeR.sig.pc9[[i]] <- MEDIPS.selectSig( results = mr.edgeR.pc9[[i]],
+                                           p.value =0.05,
+                                           adj = T,
+                                           ratio = NULL,
+                                           bg.counts= NULL)
+    }
+
+names(mr.edgeR.sig.pc9)<- names(mr.edgeR.pc9)
+
+save(list= c("mr.edgeR", "mr.edgeR.sig", "mr.edgeR.sig.gene", "anno.mart.gene", "bam_clon", "bam_wt", "bams_clones", "CS", "lista"), file="C:/Users/oncotraslacional/Documents/Arantxa/MBD-Seq_David/MEDIPSobjects.R")
+
+```
+
+
+First I keep only regions inside promoters, then split them into gained or lost methlylation and finally merge neighboring regions.
+
+```{r, eval=FALSE}
+
+#Now I select the promoter regions, considering -1000 to +100 bp from TSS
+
+prom <- MEDIPS.getAnnotation ( dataset = c("hsapiens_gene_ensembl"),
+                               annotation = c("TSS"),
+                               chr = chromosomes,
+                               tssSz = c(-1000,100))
+rois <- prom$TSS[, c(2:4,1)]
+
+
+
+cols.to.keep<- c (4:8,17:20)
+
+clones <- names (mr.edgeR.sig.h1975)
+promoter.regions <- list()
+
+gained <- list() 
+
+lost <- list ()
+
+for(i in 1:length(clones)){
+ 
+   promoter.regions[[i]] <-  MEDIPS.selectROIs( results = mr.edgeR.sig.h1975[[i]], # Keep promoters only
+                                                rois = rois,
+                                                columns= colnames (mr.edgeR.sig.h1975[[i]])[cols.to.keep] )
+   clone <- promoter.regions[[i]]
+  
+   gained[[i]] <- clone[clone$edgeR.logFC > 2,] #select gained regions
+   
+   lost[[i]] <-  clone[clone$edgeR.logFC < -2,] #Select lost regions
+
+}
+
+ 
+```
+The output of MEDIPS.selectROIS contains duplicates because the same read can be mapped to several transcripts or isoforms. First I need to remove them and then merge the windows belonging to the same promoter, I wont use MEDIPs because it merges adjacent windows without checking if they belong to the same promoter. I make a new function called merge.regions and use it.  
+```{r, eval=FALSE}
+
+for (i in 1:length (gained)) {
+  
+  duplicados <- duplicated ( gained[[i]][,1:10]) #Find duplicates
+  
+  gained [[i]] <- gained [[i]] [!duplicados,] #remove them
+  
+} 
+ 
+
+for (i in 1:length (lost)) {
+  
+  duplicados <- duplicated ( lost[[i]][,1:10]) #Find duplicates
+  
+  lost[[i]] <- lost[[i]] [!duplicados,] #remove them
+  
+} 
+
+
+source("C:/Users/oncotraslacional/Documents/Arantxa/MBD-Seq_David/merge_results_by_transcript_function.R")
+
+ #Merge by promoter and take the mean of the values
+
+ gained.merge <- list()
+
+ lost.merge <- list()
+
+ for (i in 1:length(clones)){
+  
+   gained.merge [[i]] <- merge.by.transcript(gained[[i]])
+  
+   lost.merge [[i]] <- merge.by.transcript(lost[[i]])
+ }
+
+
+
+```
+
+
+
+
+
+This result contains the reads per transcript in 100bp windows that could have been merge if they were adjacent to each other. There might be differences in transcription of isoforms. But for a quick and first approach I will merge reads of the same gene even if they are from different isoforms. First I change the Ensembl by the HUGO name and then merge regions from the same gene using the merge_regions_by_gene fucntion.
+
+
+```{r, eval=FALSE}
+#Use biomaRt to obtain the HUGO names
+
+library(biomaRt)
+  
+ 
+  mart <- useDataset("hsapiens_gene_ensembl", 
+                     useMart("ensembl"))
+  
+  for (i in 1:length(clones)){
+    
+    transcript.names <- sub( "TSS_", "", gained[[i]]$ROI)
+    
+    hugo <- getBM ( filters= "ensembl_transcript_id", 
+                 attributes= c("ensembl_transcript_id","hgnc_symbol"),
+                 values = transcript.names, 
+                 mart = mart)
+    
+    idx<- match(transcript.names, hugo$ensembl_transcript_id)
+  
+    gained[[i]]$gene<- hugo$hgnc_symbol[idx]
+  
+    
+  }
+ 
+   
+    for (i in 1:length(clones)){
+      
+      transcript.names <- sub( "TSS_", "", lost[[i]]$ROI)
+    
+      hugo <- getBM ( filters= "ensembl_transcript_id", 
+                      attributes= c("ensembl_transcript_id","hgnc_symbol"),
+                      values = transcript.names, 
+                      mart = mart)
+    
+      idx<- match(transcript.names, hugo$ensembl_transcript_id)
+  
+      lost[[i]]$gene<- hugo$hgnc_symbol[idx]
+  
+    
+  }
+  
+  source("C:/Users/oncotraslacional/Documents/Arantxa/MBD-Seq_David/merge_results_by_gene_function.R")
+ 
+  #Merge by gene
+  
+  gained.gene.merge <- list()
+
+  lost.gene.merge <- list()
+
+ for (i in 1:length(clones)){
+  
+   gained.gene.merge [[i]] <- merge.by.gene (gained[[i]])
+  
+   lost.gene.merge [[i]] <- merge.by.gene (lost[[i]])
+ }
+  
+
+  
+ 
+```
+
+
+
