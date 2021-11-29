@@ -1,0 +1,213 @@
+---
+title: "methylome pipeline"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+To analyze the methlyome data I will use the MEDIPs package. First I need to install that and all the dependencies.
+The bam files have been mapped using the hg38 genome version so I need to use that for the analysis as well. Load annotations for the genome: exons, genes and TSSs (-1000-500bp)
+```{r , eval=FALSE}
+
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install("BSgenome")
+BiocManager::install("MEDIPS")
+library(BSgenome)
+library(BiocManager)
+install("BSgenome.Hsapiens.UCSC.hg38.masked")
+library(MEDIPS)
+#get the genomes 
+BSgenome <- "BSgenome.Hsapiens.UCSC.hg38.masked"
+chromosomes <- paste0(rep("chr",24),c(1:22,"X","Y"))
+```
+Need to load the bam files and create the MEDIPs object:
+
+```{r, eval=FALSE}
+setwd("C:/Documents and Settings/oncotraslacional/Documents/Arantxa/MBD-Seq_David/BAMS/")
+
+ 
+bams <- list.files(getwd(),pattern = ".bam$")
+lista <- vector("list",length(bams))
+ 
+ for (i in 1:length(bams)){
+   sample <- bams[i]
+   lista[[i]] <- MEDIPS.createSet(file = sample,
+                                  BSgenome = BSgenome, 
+                                  chr.select = chromosomes, 
+                                  paired = T, 
+                                  extend=250, 
+                                  window_size = 100, 
+                                  shift=0, 
+                                  uniq = 1e-3 )
+ }
+names(lista)<- unlist(strsplit(bams, ".bam"))
+```
+
+
+To calculate the coverage methlylation profiles  We need to generate the background vector with the profile of the wild type cell line. For the differential methylation profile I will compare each clone with the parental cell line and put them in the list mr.edgeR
+
+
+```{r, eval=FALSE}
+
+
+ lineas <- c("H1975","H4006","H827","PC9") 
+ mr.edgeR <- list()
+
+ for (i in 1:length(lineas)){
+  
+  linea <- lineas[i]
+  
+  wt <- paste(linea,"wt", sep = "_")
+  
+  wwhich.ones<- grep(linea, names(lista))
+  
+  clones <- which.ones[-length(which.ones)]
+  
+  bam_wt <- lista[[wt]]
+  
+  bams_clones <- lista[clones]
+  
+  CS <-  MEDIPS.couplingVector(pattern = "CG", refObj = bam_wt)
+
+  
+  for (j in 1:length(bams_clones)){
+    
+    bam_clon <- bams_clones[[j]]
+    
+    mr.edgeR[[j]] <-  MEDIPS.meth(MSet1 = bam_clon,
+                                  MSet2 = bam_wt,
+                                  CSet = CS, 
+                                  p.adj = "bonferroni",
+                                  diff.method = "edgeR", 
+                                  MeDIP = T,
+                                  minRowSum = 10, 
+                                  CNV = F,
+                                  diffnorm = "tmm")
+  } 
+  
+ }
+
+#Select the significantly enriched or depleted regions with padj < 0.05
+     
+ 
+  mr.edgeR.sig<- list()
+
+  for (i in 1:length(mr.edgeR)){
+  
+    mr.edgeR.sig[[i]] <- MEDIPS.selectSig( results = mr.edgeR[[i]],
+                                           p.value =0.05,
+                                           adj = T,
+                                           ratio = NULL,
+                                           bg.counts= NULL)
+    }
+
+
+```
+
+
+To better analyze the DMR I will take into account not the promoter region but only the CpGs inside the promoters.I start the analysis with the significant regions MEDIPs object mr.edgeR.sig. We use the intersect between CpGs and promoters downloaded from the UCSC browser
+
+```{r, eval=FALSE}
+
+ #load the regions
+
+ cpgs <- read.table(file="C:/Users/oncotraslacional/Documents/Arantxa/MBD-Seq_David/RData/intersect_CpG_with_promotors_pcgenes_-2000_TSS_+500.bed",
+                    stringsAsFactors = FALSE)
+ 
+ colnames(cpgs) <- c("chr", "start", "end", "gene", "strand")
+ 
+ rois <- cpgs[,1:4]
+ 
+ #Use the selectROIS function from MEDIPs
+ 
+ cols.to.keep <- c(4:10, 17:20)
+ 
+ clones <- names( mr.edgeR.sig)
+ 
+ gained.cpgs <- vector("list", length(clones))
+ 
+ lost.cpgs <- vector("list", length(clones))
+ 
+ DMR <- vector("list", length(clones))
+
+ for(i in 1:length(clones)){
+ 
+   DMR[[i]] <-  MEDIPS.selectROIs( results = mr.edgeR.sig[[i]], # Keep CpGs only
+                                                rois = rois,
+                                                columns= colnames(mr.edgeR.sig[[i]])[cols.to.keep] )
+   clone <- DMR[[i]]
+  
+   gained.cpgs[[i]] <- clone[ clone$edgeR.logFC > 2, ] #select gained regions
+   
+   lost.cpgs[[i]] <-  clone [ clone$edgeR.logFC < -2, ] #Select lost regions
+
+}
+
+ names(DMR) <- clones
+ #Check if we have any case in which a gene is both hyper and hypomethylated
+ 
+ dobles <- c()
+ 
+ for( i in 1:length(clones)){
+  dobles[i]<- sum(unique(lost.cpgs[[i]]$ROI) %in% unique(gained.cpgs[[i]]$ROIS))
+} 
+
+ print(dobles)
+```
+
+Save the tables 
+
+```{r, eval=FALSE}
+
+file.names <- paste( clones, "gained_cpgs.txt", sep="_")
+
+for (i in 1:length(clones)){
+  
+  write.table( gained.cpgs[[i]], 
+               file= file.names[i],
+               row.names = FALSE)
+}
+
+file.names <- paste( clones, "lost_cpgs.txt", sep="_")
+
+for (i in 1:length(clones)){
+  
+  write.table( lost.cpgs[[i]], 
+               file= file.names[i],
+               row.names = FALSE)
+}
+
+
+
+```
+
+In the DMR list contains the significantly enriched or depleted methylated regions inside the CpG islands in 100 bp windows. I will merge adjacent windows belonging to the same gene using the function merge.by.gene.
+
+```{r, eval=FALSE}
+
+source("C:/Users/oncotraslacional/Documents/Arantxa/MBD-Seq_David/functions/merge_results_by_gene_function.R")
+
+
+ DMR.by.gene <- vector( "list", length(clones))
+
+
+ for (i in 1:length(clones)){
+   
+   DMR.by.gene[[i]] <- merge.by.gene (DMR[[i]])
+ 
+ }
+ 
+  file.names <- paste( clones, "DMR_by_gene_cpgs.txt", sep="_")
+for(i in 1:length(clones)){
+ 
+  write.table(DMR.by.gene[[i]], 
+              file= file.names[i] )
+}
+ 
+ names(DMR.by.gene) <- clones
+ 
+
+```

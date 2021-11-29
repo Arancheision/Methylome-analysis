@@ -1,0 +1,110 @@
+---
+title: DMR_CpGs
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+To better analyze the DMR I will take into account not the promoter region but only the CpGs inside the promoters.I start the analysis with the significant regions MEDIPs object mr.edgeR.sig. We use the intersect between CpGs and promoters downloaded from the UCSC browser
+
+```{r, eval=FALSE}
+
+ #load the regions
+
+ cpgs <- read.table(file="C:/Users/oncotraslacional/Documents/Arantxa/MBD-Seq_David/RData/intersect_CpG_with_promotors_pcgenes_-2000_TSS_+500.bed",
+                    stringsAsFactors = FALSE)
+ 
+ colnames(cpgs) <- c("chr", "start", "end", "gene", "strand")
+ 
+ rois <- cpgs[,1:4]
+ 
+ #Use the selectROIS function from MEDIPs
+ 
+ cols.to.keep <- c(4:10, 17:20)
+ 
+ clones <- names( mr.edgeR.sig)
+ 
+ gained.cpgs <- vector("list", length(clones))
+ 
+ lost.cpgs <- vector("list", length(clones))
+ 
+ DMR <- vector("list", length(clones))
+
+ for(i in 1:length(clones)){
+ 
+   DMR[[i]] <-  MEDIPS.selectROIs( results = mr.edgeR.sig[[i]], # Keep CpGs only
+                                                rois = rois,
+                                                columns= colnames(mr.edgeR.sig[[i]])[cols.to.keep] )
+   clone <- DMR[[i]]
+  
+   gained.cpgs[[i]] <- clone[ clone$edgeR.logFC > 2, ] #select gained regions
+   
+   lost.cpgs[[i]] <-  clone [ clone$edgeR.logFC < -2, ] #Select lost regions
+
+}
+
+ names(DMR) <- clones
+ #Check if we have any case in which a gene is both hyper and hypomethylated
+ 
+ dobles <- c()
+ 
+ for( i in 1:length(clones)){
+  dobles[i]<- sum(unique(lost.cpgs[[i]]$ROI) %in% unique(gained.cpgs[[i]]$ROIS))
+} 
+
+ print(dobles)
+```
+
+Save the tables 
+
+```{r, eval=FALSE}
+
+file.names <- paste( clones, "gained_cpgs.txt", sep="_")
+
+for (i in 1:length(clones)){
+  
+  write.table( gained.cpgs[[i]], 
+               file= file.names[i],
+               row.names = FALSE)
+}
+
+file.names <- paste( clones, "lost_cpgs.txt", sep="_")
+
+for (i in 1:length(clones)){
+  
+  write.table( lost.cpgs[[i]], 
+               file= file.names[i],
+               row.names = FALSE)
+}
+
+
+
+```
+
+In the DMR list contains the significantly enriched or depleted methylated regions inside the CpG islands in 100 bp windows. I will merge adjacent windows belonging to the same gene using the function merge.by.gene.
+
+```{r, eval=FALSE}
+
+source("C:/Users/oncotraslacional/Documents/Arantxa/MBD-Seq_David/functions/merge_results_by_gene_function.R")
+
+
+ DMR.by.gene <- vector( "list", length(clones))
+
+
+ for (i in 1:length(clones)){
+   
+   DMR.by.gene[[i]] <- merge.by.gene (DMR[[i]])
+ 
+}
+
+ names(DMR.by.gene) <- clones
+ 
+
+```
+
+
+
+

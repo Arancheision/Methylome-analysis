@@ -4,6 +4,8 @@ output:
   html_document:
     df_print: paged
   pdf_document: default
+editor_options: 
+  chunk_output_type: console
 ---
 
 To better analyze the DMR I will take into account not the promoter region but only the CpGs inside the promoters.I start the analysis with the significant regions MEDIPs object
@@ -12,7 +14,7 @@ To better analyze the DMR I will take into account not the promoter region but o
  setwd("C:/Users/oncotraslacional/Documents/Arantxa/MBD-Seq_David")
  #load the regions
 
- cpgs <- read.table(file="/RData/intersect_CpG_with_promotors_pcgenes_-2000_TSS_+500.bed",
+ cpgs <- read.table(file="C:/Users/oncotraslacional/Documents/Arantxa/MBD-Seq_David/RData/intersect_CpG_with_promotors_pcgenes_-2000_TSS_+500.bed",
                     stringsAsFactors = FALSE)
  
  colnames(cpgs) <- c("chr", "start", "end", "gene", "strand")
@@ -23,11 +25,7 @@ To better analyze the DMR I will take into account not the promoter region but o
  
  cols.to.keep <- c(4:10, 17:20)
  
- clones <- c("H827_1",
-             "H827_12",
-             "H827_4",
-             "H827_6",
-             "H827_pl1")
+ clones <- names( mr.edgeR.sig)
  
  gained.cpgs <- list()
  
@@ -37,7 +35,7 @@ To better analyze the DMR I will take into account not the promoter region but o
 
  for(i in 1:length(clones)){
  
-   DMR[[i]] <-  MEDIPS.selectROIs( results = mr.edgeR.sig[[i]], # Keep promoters only
+   DMR[[i]] <-  MEDIPS.selectROIs( results = mr.edgeR.sig[[i]], # Keep CpGs only
                                                 rois = rois,
                                                 columns= colnames(mr.edgeR.sig[[i]])[cols.to.keep] )
    clone <- DMR[[i]]
@@ -174,30 +172,21 @@ cols.to.keep <- c(4:10, 17:20)
 
  
 ```
-The value of MEDIPs contains the significantly enriched or depleted methylated regions inside the CpG islands in 100 bp window. I will merge adjacent windows using the function merge.by.gene.
+The value of MEDIPs contains the significantly enriched or depleted methylated regions inside the CpG islands in 100 bp windows. I will merge adjacent windows using the function merge.by.gene.
 ```{r, eval=FALSE}
 
 #Clone "H827_1"doesn't have any gained regions, so I remove it from the for loop
 
-source("C:/Users/oncotraslacional/Documents/Arantxa/MBD-Seq_David/merge_results_by_gene_function.R")
+source("C:/Users/oncotraslacional/Documents/Arantxa/MBD-Seq_David/functions/merge_results_by_gene_function.R")
 
 
-clones <- c("H827_12",
-            "H827_4",
-            "H827_6",
-            "H827_pl1")
+ DMR.by.gene<- vector( "list", length(clones))
+
+
+for (i in 1:length(clones)){
+  
+ DMR.by.gene[[i]] <- merge.by.gene (DMR[[i]])
  
-for (i in 1:length(clones)){
-  
-  colnames(gained.cpgs[[i]])[15] <- "gene"
-  colnames(lost.cpgs[[i]])[15] <- "gene"
-}
-
-gained.cpgs<- gained.cpgs[2:5]
-gained.cpgs.merge <- list()
-for (i in 1:length(clones)){
-  
-  gained.cpgs.merge[[i]] <- merge.by.gene (gained.cpgs[[i]])
 }
 
 
@@ -254,6 +243,38 @@ for (i in 1:length(clones)){
 }
 
 
+```
+To make the heatmaps I need to make a matrix per clon with the common genes
+
+```{r}
+
+to.heatmap <- vector("list", length(DMR.by.gene))
+names(to.heatmap) <- names( DMR.by.gene)
+  
+  for (i in 1:length(DMR.by.gene)){
+    
+   
+    to.heatmap[[i]] <- subset.data.frame(DMR.by.gene[[i]], 
+                                         subset = abs(DMR.by.gene[[i]]$edgeR.logFC) > 2,
+                                         select = c(gene, edgeR.logFC,edgeR ))
+    
+    names(to.heatmap[[i]])[2] <- names(to.heatmap)[i] 
+  
+  }
+
+  #Make a data.frame per line 
+   h1975 <- Reduce(function(x, y) merge(x, y, all=FALSE), to.heatmap[6:10])
+   rownames(h1975)<- h1975$gene
+   pheatmap( h1975[,-1], treeheight_row = 2, treeheight_col =1 )
+   pc9 <- Reduce(function(x, y) merge(x, y, all=FALSE), to.heatmap[12:15])
+   rownames(pc9) <- pc9$gene
+   pheatmap(pc9[,-1], fontsize_row = 1, treeheight_row = 2, treeheight_col =1 )
+   h827<- Reduce(function(x, y) merge(x, y, all=FALSE), to.heatmap[1:5])
+   rownames(h827)<- h827$gene
+   pheatmap(h827[,-1], treeheight_row = 2, treeheight_col =1 )
+   
+   
+   
 ```
 
 

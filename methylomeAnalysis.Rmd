@@ -1,4 +1,3 @@
----
 title: "Methylome analysis"
 output:
   html_document:
@@ -18,33 +17,23 @@ The bam files have been mapped using the hg38 genome version so I need to use th
 ```{r , eval=FALSE}
 if (!requireNamespace("BiocManager", quietly = TRUE))
     install.packages("BiocManager")
-
 BiocManager::install("BSgenome")
-
 BiocManager::install("MEDIPS")
-
 library(BSgenome)
 library(BiocManager)
 install("BSgenome.Hsapiens.UCSC.hg38.masked")
 library(MEDIPS)
-
 #get the genomes 
-
 BSgenome <- "BSgenome.Hsapiens.UCSC.hg38.masked"
-
 chromosomes <- paste0(rep("chr",24),c(1:22,"X","Y"))
-
-
 ```
 Need to load the bam files and create the MEDIPs object:
 
 ```{r, eval=FALSE}
-
 setwd("C:/Documents and Settings/oncotraslacional/Documents/Arantxa/MBD-Seq_David/BAMS/")
- 
+
  
 bams <- list.files(getwd(),pattern = ".bam$")
-
 lista <- vector("list",length(bams))
  
  for (i in 1:length(bams)){
@@ -58,9 +47,7 @@ lista <- vector("list",length(bams))
                                   shift=0, 
                                   uniq = 1e-3 )
  }
-
 names(lista)<- unlist(strsplit(bams, ".bam"))
-
 ```
 
 
@@ -68,16 +55,33 @@ To calculate the coverage methlylation profiles  We need to generate the backgro
 
 
 ```{r, eval=FALSE}
-mr.edgeR.pc9<- list()
-CS <-  MEDIPS.couplingVector(pattern = "CG", refObj = lista[["PC9_wt"]])
-bam_wt <- lista[["PC9_wt"]]
-bams_clones <- lista[9:12]
+
+
+ lineas <- c("H1975","H4006","H827","PC9") 
+ mr.edgeR <- list()
+
+ for (i in 1:length(lineas)){
   
-  for (i in 1:length(bams_clones)){
+  linea <- lineas[i]
+  
+  wt <- paste(linea,"wt", sep = "_")
+  
+  wwhich.ones<- grep(linea, names(lista))
+  
+  clones <- which.ones[-length(which.ones)]
+  
+  bam_wt <- lista[[wt]]
+  
+  bams_clones <- lista[clones]
+  
+  CS <-  MEDIPS.couplingVector(pattern = "CG", refObj = bam_wt)
+
+  
+  for (j in 1:length(bams_clones)){
     
-    bam_clon <- bams_clones[[i]]
+    bam_clon <- bams_clones[[j]]
     
-    mr.edgeR.pc9[[i]] <-  MEDIPS.meth(MSet1 = bam_clon,
+    mr.edgeR[[j]] <-  MEDIPS.meth(MSet1 = bam_clon,
                                   MSet2 = bam_wt,
                                   CSet = CS, 
                                   p.adj = "bonferroni",
@@ -86,26 +90,24 @@ bams_clones <- lista[9:12]
                                   minRowSum = 10, 
                                   CNV = F,
                                   diffnorm = "tmm")
-  }
-
-names(mr.edgeR.pc9) <- names(bams_clones)
+  } 
+  
+ }
 
 #Select the significantly enriched or depleted regions with padj < 0.05
      
-mr.edgeR.sig.pc9<- list()
+ 
+  mr.edgeR.sig<- list()
 
-  for (i in 1:length(mr.edgeR.pc9)){
+  for (i in 1:length(mr.edgeR)){
   
-    mr.edgeR.sig.pc9[[i]] <- MEDIPS.selectSig( results = mr.edgeR.pc9[[i]],
+    mr.edgeR.sig[[i]] <- MEDIPS.selectSig( results = mr.edgeR[[i]],
                                            p.value =0.05,
                                            adj = T,
                                            ratio = NULL,
                                            bg.counts= NULL)
     }
 
-names(mr.edgeR.sig.pc9)<- names(mr.edgeR.pc9)
-
-save(list= c("mr.edgeR", "mr.edgeR.sig", "mr.edgeR.sig.gene", "anno.mart.gene", "bam_clon", "bam_wt", "bams_clones", "CS", "lista"), file="C:/Users/oncotraslacional/Documents/Arantxa/MBD-Seq_David/MEDIPSobjects.R")
 
 ```
 
@@ -113,26 +115,17 @@ save(list= c("mr.edgeR", "mr.edgeR.sig", "mr.edgeR.sig.gene", "anno.mart.gene", 
 First I keep only regions inside promoters, then split them into gained or lost methlylation and finally merge neighboring regions.
 
 ```{r, eval=FALSE}
-
 #Now I select the promoter regions, considering -1000 to +100 bp from TSS
-
 prom <- MEDIPS.getAnnotation ( dataset = c("hsapiens_gene_ensembl"),
                                annotation = c("TSS"),
                                chr = chromosomes,
                                tssSz = c(-1000,100))
 rois <- prom$TSS[, c(2:4,1)]
-
-
-
 cols.to.keep<- c (4:8,17:20)
-
 clones <- names (mr.edgeR.sig.h1975)
 promoter.regions <- list()
-
 gained <- list() 
-
 lost <- list ()
-
 for(i in 1:length(clones)){
  
    promoter.regions[[i]] <-  MEDIPS.selectROIs( results = mr.edgeR.sig.h1975[[i]], # Keep promoters only
@@ -143,14 +136,11 @@ for(i in 1:length(clones)){
    gained[[i]] <- clone[clone$edgeR.logFC > 2,] #select gained regions
    
    lost[[i]] <-  clone[clone$edgeR.logFC < -2,] #Select lost regions
-
 }
-
  
 ```
 The output of MEDIPS.selectROIS contains duplicates because the same read can be mapped to several transcripts or isoforms. First I need to remove them and then merge the windows belonging to the same promoter, I wont use MEDIPs because it merges adjacent windows without checking if they belong to the same promoter. I make a new function called merge.regions and use it.  
 ```{r, eval=FALSE}
-
 for (i in 1:length (gained)) {
   
   duplicados <- duplicated ( gained[[i]][,1:10]) #Find duplicates
@@ -159,7 +149,6 @@ for (i in 1:length (gained)) {
   
 } 
  
-
 for (i in 1:length (lost)) {
   
   duplicados <- duplicated ( lost[[i]][,1:10]) #Find duplicates
@@ -167,25 +156,16 @@ for (i in 1:length (lost)) {
   lost[[i]] <- lost[[i]] [!duplicados,] #remove them
   
 } 
-
-
 source("C:/Users/oncotraslacional/Documents/Arantxa/MBD-Seq_David/merge_results_by_transcript_function.R")
-
  #Merge by promoter and take the mean of the values
-
  gained.merge <- list()
-
  lost.merge <- list()
-
  for (i in 1:length(clones)){
   
    gained.merge [[i]] <- merge.by.transcript(gained[[i]])
   
    lost.merge [[i]] <- merge.by.transcript(lost[[i]])
  }
-
-
-
 ```
 
 
@@ -197,7 +177,6 @@ This result contains the reads per transcript in 100bp windows that could have b
 
 ```{r, eval=FALSE}
 #Use biomaRt to obtain the HUGO names
-
 library(biomaRt)
   
  
@@ -242,9 +221,7 @@ library(biomaRt)
   #Merge by gene
   
   gained.gene.merge <- list()
-
   lost.gene.merge <- list()
-
  for (i in 1:length(clones)){
   
    gained.gene.merge [[i]] <- merge.by.gene (gained[[i]])
@@ -252,10 +229,6 @@ library(biomaRt)
    lost.gene.merge [[i]] <- merge.by.gene (lost[[i]])
  }
   
-
   
  
 ```
-
-
-

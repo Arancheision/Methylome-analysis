@@ -29,7 +29,6 @@ colnames(cres) <- c( "chrom",
                     "url")
                     
 
-
 ```
 
 The promoters are annotated as PLS (promoter like signature), enhancers as pELS (proximal enhancer like signature), dELS (distal enhancer like signature).Both, promoters and enhancers are also annotated if they are CTCF bound. I want to intersect the DMR with the ENCODE cCREs regions and check if there is any enrichment specifically at promoters and enhancer
